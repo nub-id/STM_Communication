@@ -23,6 +23,22 @@
 
 #define INVALID_PIN 0xFF
 
+#define RESP_MARKER	0xA5
+#define RESP_ERR	0xEE
+#define MARKER_TRIES	64U
+#define SPI_TIMEOUT		100000U
+#define LAST_PORT	'H'
+
+#define MAX_FIELDS	4U
+
+static void Print(const char *s){
+	USART_SendData(USART2, (uint8_t*)s, (uint32_t)strlen(s));
+}
+
+static void Guard(void){
+	for(volatile uint32_t i=0; i<200U; i++);
+}
+
 void delay(uint32_t n)
 {
     for(uint32_t i = 0; i < n * 50000U; i++);
@@ -31,6 +47,7 @@ void delay(uint32_t n)
 void SPI2_GPIO_Init(void)
 {
     GPIO_Handle_t SPI2_pins;
+    memset(&SPI2_pins, 0, sizeof(SPI2_pins));
 
     SPI2_pins.pGPIOxAddr = GPIOB;
     SPI2_pins.GPIO_Config.GPIO_PinMode = GPIO_MODE_ALTFN;
@@ -68,11 +85,10 @@ void Master_NSS_Init(void)
 
     NSS_pins.GPIO_Config.GPIO_Pin_Number = GPIO_PIN_NO_11;
     GPIO_Init(&NSS_pins);   	// Slave 1 NSS PB11
+    GPIO_WriteToPin(GPIOB, GPIO_PIN_NO_11, GPIO_PIN_SET);
 
     NSS_pins.GPIO_Config.GPIO_Pin_Number = GPIO_PIN_NO_12;
     GPIO_Init(&NSS_pins);   	// Slave 2 NSS PB12
-
-    GPIO_WriteToPin(GPIOB, GPIO_PIN_NO_11, GPIO_PIN_SET);
     GPIO_WriteToPin(GPIOB, GPIO_PIN_NO_12, GPIO_PIN_SET);
 }
 
@@ -86,7 +102,7 @@ void SPI2_Init(void)
     SPI2_h.SPIConfig.SPI_DFF = SPI_DFF_8BITS;
     SPI2_h.SPIConfig.SPI_CPHA = SPI_CPHA_LOW;
     SPI2_h.SPIConfig.SPI_CPOL = SPI_CPOL_LOW;
-    SPI2_h.SPIConfig.SPI_Speed = SPI_SCLK_SPEED_DIV8;
+    SPI2_h.SPIConfig.SPI_Speed = SPI_SCLK_SPEED_DIV16; //16MHz/16 = 1MHz
     SPI2_h.SPIConfig.SPI_SSM = SPI_SSM_EN;
 
     SPI_Init(&SPI2_h);
@@ -95,6 +111,7 @@ void SPI2_Init(void)
 void USART2_Init(void)
 {
     GPIO_Handle_t usart_pins;
+    memset(&usart_pins, 0, sizeof(usart_pins));
 
     usart_pins.pGPIOxAddr = GPIOA;
     usart_pins.GPIO_Config.GPIO_PinMode = GPIO_MODE_ALTFN;
@@ -110,6 +127,7 @@ void USART2_Init(void)
     GPIO_Init(&usart_pins);  	// RX PA3
 
     USART_Handle_t usart2_h;
+    memset(&usart2_h, 0, sizeof(usart2_h));
 
     usart2_h.pUSARTx = USART2;
     usart2_h.USART_Config.USART_Baud = USART_BAUD_115200;
@@ -125,26 +143,50 @@ void USART2_Init(void)
 
 void ReadCommand(char *buf, uint32_t size)
 {
+	static uint8_t last_was_cr = 0;
     uint8_t rx_byte;
     uint32_t i = 0;
     uint8_t overflow = 0;
 
-    if(size < 2U) return;
+    if(size < 2U){
+    	if(size == 1U){
+    		buf[0] = '\0';
+    	}
+    	return;
+    }
 
     while(1)
     {
         USART_ReceiveData(USART2, &rx_byte, 1);
-        USART_SendData(USART2, &rx_byte, 1);
+
+
+        if(rx_byte == '\n' && last_was_cr){
+        	last_was_cr = 0;
+        	continue;
+        }
+
+        last_was_cr = (rx_byte == '\r');
 
         if(rx_byte == '\r' || rx_byte == '\n'){
 
             char newline[] = "\r\n";
-            USART_SendData(USART2, (uint8_t*)newline, 2);
+            Print(newline);
             break;
         }
 
+        if(rx_byte == 0x08U || rx_byte == 0x7FU){
+        	if(i>0U){
+        		i--;
+        		Print("\b \b");
+        	}
+        	continue;
+        }
+
+        if(rx_byte < 0x20U || rx_byte > 0x7EU) continue;
+
         if(i < size - 1U){
         	buf[i++] = (char)rx_byte;
+        	USART_SendData(USART2, &rx_byte, 1);
         }
         else{
         	overflow = 1;
@@ -161,7 +203,7 @@ uint8_t EncodePin(char port, uint8_t pin)
 {
     uint8_t port_id;
 
-    if(port >= 'A' && port <= 'I'){
+    if(port >= 'A' && port <= 'H'){
     	port_id = (uint8_t)(port - 'A');
     }
     else{
@@ -176,24 +218,43 @@ uint8_t EncodePin(char port, uint8_t pin)
 
 uint8_t ParsePin(const char *text, uint8_t *pin_id)
 {
-    uint16_t pin = 0;
-    uint8_t i = 1;
+    uint8_t pin = 0;
 
     if(text == NULL || pin_id == NULL) return 0;
-    if(text[0] < 'A' || text[0] > 'I') return 0;
+    if(text[0] < 'A' || text[0] > 'H') return 0;
     if(text[1] < '0' || text[1] > '9') return 0;
 
-    while(text[i] != '\0')
-    {
-        if(text[i] < '0' || text[i] > '9') return 0;
+    pin = (uint8_t)(text[1] - '0');
 
-        pin = (uint16_t)(pin * 10U + (uint16_t)(text[i] - '0'));
-        if(pin > 15U) return 0;
-        i++;
+    if(text[2] != '\0'){
+        if(text[1] == '0') return 0;                    // "A05"
+        if(text[2] < '0' || text[2] > '9') return 0;
+        if(text[3] != '\0') return 0;                   // "A123"
+        pin = (uint8_t)(pin * 10U + (uint8_t)(text[2] - '0'));
     }
 
-    *pin_id = EncodePin(text[0], (uint8_t)pin);
+    if(pin > 15U) return 0;
+
+    *pin_id = EncodePin(text[0], pin);
     return (*pin_id != INVALID_PIN);
+}
+
+static uint8_t SplitCommand(char *cmd, char *fields[], uint8_t max_fields){
+    uint8_t n = 0;
+    fields[n++] = cmd;
+
+    for(char *p = cmd; *p != '\0'; p++){
+        if(*p == '.'){
+            *p = '\0';
+            if(n >= max_fields) return 0;
+            fields[n++] = p + 1;
+        }
+    }
+
+    for(uint8_t i = 0; i < n; i++){
+        if(fields[i][0] == '\0') return 0;
+    }
+    return n;
 }
 
 void SPI_SelectSlave(uint8_t slave)
@@ -216,94 +277,149 @@ void SPI_DeselectSlave(uint8_t slave)
     }
 }
 
-uint8_t SPI_ExecuteCommand(uint8_t slave, uint8_t *data, uint32_t length)
+static uint8_t SPI_TransferByte(uint8_t tx, uint8_t *rx)
 {
-    uint8_t dummy = 0xFF;
-    uint8_t response = 0;
-    uint8_t temp;
+    uint32_t t = SPI_TIMEOUT;
+
+    while(!SPI_GetFlagStatus(SPI2, SPI_TXE_FLAG)){
+        if(--t == 0U) return 0;
+    }
+    SPI2->DR = tx;
+
+    t = SPI_TIMEOUT;
+    while(!SPI_GetFlagStatus(SPI2, SPI_RXNE_FLAG)){
+        if(--t == 0U) return 0;
+    }
+    *rx = (uint8_t)SPI2->DR;
+    return 1;
+}
+
+static uint8_t SPI_Transaction(const uint8_t *data, uint32_t length, uint8_t *response)
+{
+    uint8_t rx;
+
+    if(SPI_GetFlagStatus(SPI2, SPI_RXNE_FLAG)){
+        rx = (uint8_t)SPI2->DR;
+        (void)rx;
+    }
+
+    for(uint32_t i = 0; i < length; i++){
+        if(!SPI_TransferByte(data[i], &rx)) return 0;
+    }
+
+    for(uint32_t tries = 0; tries < MARKER_TRIES; tries++){
+        if(!SPI_TransferByte(0xFF, &rx)) return 0;
+
+        if(rx == RESP_MARKER){
+            if(!SPI_TransferByte(0xFF, response)) return 0;
+            return 1;
+        }
+    }
+    return 0;   // slave never answered (not connected/ hung)
+}
+
+uint8_t SPI_ExecuteCommand(uint8_t slave, uint8_t *data, uint32_t length, uint8_t *response)
+{
+    uint8_t ok;
+    uint32_t t = SPI_TIMEOUT;
 
     if(slave != 1U && slave != 2U) return 0;
 
     SPI_SelectSlave(slave);
+    Guard();
 
-    SPI_SendData(SPI2, data, length);
+    ok = SPI_Transaction(data, length, response);
 
-    delay(1);
-
-    if(SPI_GetFlagStatus(SPI2, (1U << SPI_SR_RXNE)))
-    {
-        temp = SPI2->DR;
-        (void)temp;
-    }
-
-    SPI_SendData(SPI2, &dummy, 1);
-
-    SPI_RecieveData(SPI2, &response, 1);
-
+    while(SPI_GetFlagStatus(SPI2, SPI_BSY_FLAG) && t--);
     SPI_DeselectSlave(slave);
 
-    return response;
+    return ok;
 }
 
 void ProcessCommand(char *command)
 {
-    char *slave_text = strtok(command, ".");
-    char *operation  = strtok(NULL, ".");
-    char *pin_text   = strtok(NULL, ".");
-    char *value_text = strtok(NULL, ".");
-    char *extra      = strtok(NULL, ".");
+    static const char usage[] = "ERROR: use <1|2>.Status.<Pin> | <1|2>.Read.<Pin> | <1|2>.Write.<Pin>.<High|Low>  (Pin: A0..H15)\r\n";
+
+    char *fields[MAX_FIELDS];
+    uint8_t nfields = SplitCommand(command, fields, MAX_FIELDS);
 
     uint8_t slave;
-    uint8_t pin_id;
+    uint8_t pin_id = 0;
     uint8_t data[3];
     uint32_t length;
-    char out_msg[64];
+    uint8_t resp = 0;
+    char out_msg[96];
 
-    if(slave_text == NULL || operation == NULL) return;
+    if(nfields < 3U){
+    	Print(usage);
+    	return;
+    }
 
-    if(strcmp(slave_text, "1") == 0){
-    	slave = 1;
+    if(strcmp(fields[0], "1") == 0)      slave = 1;
+    else if(strcmp(fields[0], "2") == 0) slave = 2;
+    else{
+    	Print(usage);
+    	return;
     }
-    else if(strcmp(slave_text, "2") == 0){
-    	slave = 2;
-    }
-    else return;
+
+    const char *operation = fields[1];
 
     if(strcmp(operation, "Status") == 0 || strcmp(operation, "Read") == 0){
 
-        if(pin_text == NULL || value_text != NULL || extra != NULL) return;
-        if(!ParsePin(pin_text, &pin_id)) return;
+        if(nfields != 3U || !ParsePin(fields[2], &pin_id)){ Print(usage); return; }
 
         data[0] = (strcmp(operation, "Status") == 0) ? CMD_STATUS : CMD_READ;
         data[1] = pin_id;
         length = 2;
     }
-
     else if(strcmp(operation, "Write") == 0){
 
-        if(pin_text == NULL || value_text == NULL || extra != NULL) return;
-        if(!ParsePin(pin_text, &pin_id)) return;
+        if(nfields != 4U || !ParsePin(fields[2], &pin_id)){ Print(usage); return; }
 
-        if(strcmp(value_text, "High") == 0) data[2] = VAL_HIGH;
-        else if(strcmp(value_text, "Low") == 0) data[2] = VAL_LOW;
-        else return;
+        if(strcmp(fields[3], "High") == 0)     data[2] = VAL_HIGH;
+        else if(strcmp(fields[3], "Low") == 0) data[2] = VAL_LOW;
+        else{
+        	Print(usage);
+        	return;
+        }
 
         data[0] = CMD_WRITE;
         data[1] = pin_id;
         length = 3;
     }
-    else return;
+    else { Print(usage); return; }
 
-    uint8_t resp = SPI_ExecuteCommand(slave, data, length);
+    char port_ch = (char)('A' + (pin_id >> 4));
+    uint32_t pin_no = (uint32_t)(pin_id & 0x0FU);
 
-    if(data[0] == CMD_STATUS || data[0] == CMD_READ){
-        sprintf(out_msg, "Slave %d Pin %s is %s\r\n", slave, pin_text, (resp == VAL_HIGH) ? "HIGH" : "LOW");
+    if(!SPI_ExecuteCommand(slave, data, length, &resp)){
+        snprintf(out_msg, sizeof(out_msg), "ERROR: Slave %u did not respond\r\n", (unsigned)slave);
+        Print(out_msg);
+        return;
+    }
+
+    if(resp == RESP_ERR){
+        snprintf(out_msg, sizeof(out_msg), "ERROR: Slave %u rejected %c%lu\r\n", (unsigned)slave, port_ch, (unsigned long)pin_no);
     }
     else if(data[0] == CMD_WRITE){
-        sprintf(out_msg, "Slave %d Pin %s written %s OK\r\n", slave, pin_text, (resp == VAL_HIGH) ? "HIGH" : "LOW");
+        if(resp == data[2]){
+            snprintf(out_msg, sizeof(out_msg), "Slave %u Pin %c%lu written %s OK\r\n", (unsigned)slave, port_ch, (unsigned long)pin_no,
+                     (resp == VAL_HIGH) ? "HIGH" : "LOW");
+        }
+        else{
+            snprintf(out_msg, sizeof(out_msg), "ERROR: Slave %u bad write echo 0x%02X\r\n", (unsigned)slave, (unsigned)resp);
+        }
+    }
+    else{
+        if(resp == VAL_HIGH || resp == VAL_LOW){
+            snprintf(out_msg, sizeof(out_msg), "Slave %u Pin %c%lu is %s\r\n", (unsigned)slave, port_ch, (unsigned long)pin_no, (resp == VAL_HIGH) ? "HIGH" : "LOW");
+        }
+        else{
+            snprintf(out_msg, sizeof(out_msg), "ERR: Slave %u bad reply 0x%02X\r\n", (unsigned)slave, (unsigned)resp);
+        }
     }
 
-    USART_SendData(USART2, (uint8_t*)out_msg, strlen(out_msg));
+    Print(out_msg);
 }
 
 int main(void)
@@ -319,8 +435,7 @@ int main(void)
     SPI_PeripheralControl(SPI2, ENABLE);
     USART_PeripheralControl(USART2, ENABLE);
 
-    char start_msg[] = "Type your command.:\r\n> ";
-    USART_SendData(USART2, (uint8_t*)start_msg, strlen(start_msg));
+    Print("Type your command.:\r\n> ");
 
     while(1)
     {
@@ -329,10 +444,9 @@ int main(void)
         if(rx_buffer[0] != '\0')
         {
             ProcessCommand(rx_buffer);
-
-            char prompt[] = "> ";
-			USART_SendData(USART2, (uint8_t*)prompt, strlen(prompt));
         }
+
+        Print("> ");
     }
     return 0;
 }
