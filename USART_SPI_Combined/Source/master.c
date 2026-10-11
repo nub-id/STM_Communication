@@ -48,11 +48,12 @@ void SPI2_GPIO_Init(void)
     SPI2_pins.GPIO_Config.GPIO_Pin_Number = GPIO_PIN_NO_15;
     GPIO_Init(&SPI2_pins);  	// MOSI PB15
 
-	GPIOB->BSRR = (1U << 9); //I faced an issue here due to open drain system
+    //I faced an issue here due to open drain system
 
 	SPI2_pins.GPIO_Config.GPIO_Pin_Number = GPIO_PIN_NO_9;
 	SPI2_pins.GPIO_Config.GPIO_PinMode = GPIO_MODE_OUTPUT;
 	GPIO_Init(&SPI2_pins);
+	GPIO_WriteToPin(GPIOB, GPIO_PIN_NO_9, GPIO_PIN_SET);
 }
 
 void Master_NSS_Init(void)
@@ -133,8 +134,14 @@ void ReadCommand(char *buf, uint32_t size)
     while(1)
     {
         USART_ReceiveData(USART2, &rx_byte, 1);
+        USART_SendData(USART2, &rx_byte, 1);
 
-        if(rx_byte == '\r' || rx_byte == '\n') break;
+        if(rx_byte == '\r' || rx_byte == '\n'){
+
+            char newline[] = "\r\n";
+            USART_SendData(USART2, (uint8_t*)newline, 2);
+            break;
+        }
 
         if(i < size - 1U){
         	buf[i++] = (char)rx_byte;
@@ -312,6 +319,9 @@ int main(void)
     SPI_PeripheralControl(SPI2, ENABLE);
     USART_PeripheralControl(USART2, ENABLE);
 
+    char start_msg[] = "Type your command.:\r\n> ";
+    USART_SendData(USART2, (uint8_t*)start_msg, strlen(start_msg));
+
     while(1)
     {
         ReadCommand(rx_buffer, sizeof(rx_buffer));
@@ -319,6 +329,9 @@ int main(void)
         if(rx_buffer[0] != '\0')
         {
             ProcessCommand(rx_buffer);
+
+            char prompt[] = "> ";
+			USART_SendData(USART2, (uint8_t*)prompt, strlen(prompt));
         }
     }
     return 0;
