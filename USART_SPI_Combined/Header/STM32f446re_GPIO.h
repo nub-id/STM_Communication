@@ -72,6 +72,7 @@ void GPIO_Init(GPIO_Handle_t *pGPIOHandle);
 void GPIO_DeInit(GPIO_RegDef_t *pGPIOxAddr);
 
 uint8_t GPIO_ReadFromPin(GPIO_RegDef_t *pGPIOxAddr, uint8_t PinNumber);
+uint8_t GPIO_ReadFromPin_ODR(GPIO_RegDef_t *pGPIOxAddr, uint8_t PinNumber);
 uint16_t GPIO_ReadFromPort(GPIO_RegDef_t *pGPIOxAddr);
 void GPIO_WriteToPin(GPIO_RegDef_t *pGPIOxAddr, uint8_t PinNumber, uint8_t Value);
 void GPIO_WriteToPort(GPIO_RegDef_t *pGPIOxAddr, uint16_t Value);
