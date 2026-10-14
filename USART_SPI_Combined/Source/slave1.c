@@ -169,7 +169,7 @@ static uint8_t Slave_Execute(uint8_t cmd, uint8_t pin_id, uint8_t value)
     if(cmd == CMD_STATUS){
 
         GPIO_PeriClockControl(pPort, ENABLE);
-        return GPIO_ReadFromPin(pPort, pin_num);
+        return GPIO_ReadFromPin_ODR(pPort, pin_num);
     }
 
     if(IsProtectedPin(port_id, pin_num)) return RESP_ERR;

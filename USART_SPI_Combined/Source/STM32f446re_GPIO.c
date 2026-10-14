@@ -147,6 +147,12 @@ uint8_t GPIO_ReadFromPin(GPIO_RegDef_t *pGPIOxAddr, uint8_t PinNumber)
 	return value;
 }
 
+uint8_t GPIO_ReadFromPin_ODR(GPIO_RegDef_t *pGPIOxAddr, uint8_t PinNumber)
+{
+	uint8_t value;
+	value = (uint8_t)((pGPIOxAddr->ODR >> PinNumber) & 0x1U);
+	return value;
+}
 uint16_t GPIO_ReadFromPort(GPIO_RegDef_t *pGPIOxAddr)
 {
 	uint16_t value;

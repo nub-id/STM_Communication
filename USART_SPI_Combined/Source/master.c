@@ -21,15 +21,15 @@
 #define VAL_HIGH    0x01
 #define VAL_LOW     0x00
 
-#define INVALID_PIN 0xFF
+#define INVALID_PIN 	0xFF
 
-#define RESP_MARKER	0xA5
-#define RESP_ERR	0xEE
+#define RESP_MARKER		0xA5
+#define RESP_ERR		0xEE
 #define MARKER_TRIES	64U
 #define SPI_TIMEOUT		100000U
-#define LAST_PORT	'H'
+#define LAST_PORT		'H'
 
-#define MAX_FIELDS	4U
+#define MAX_FIELDS		4U
 
 static void Print(const char *s){
 	USART_SendData(USART2, (uint8_t*)s, (uint32_t)strlen(s));
@@ -76,6 +76,7 @@ void SPI2_GPIO_Init(void)
 void Master_NSS_Init(void)
 {
     GPIO_Handle_t NSS_pins;
+    memset(&NSS_pins, 0, sizeof(NSS_pins));
 
     NSS_pins.pGPIOxAddr = GPIOB;
     NSS_pins.GPIO_Config.GPIO_PinMode = GPIO_MODE_OUTPUT;
@@ -95,6 +96,7 @@ void Master_NSS_Init(void)
 void SPI2_Init(void)
 {
     SPI_Handle_t SPI2_h;
+    memset(&SPI2_h, 0, sizeof(SPI2_h));
 
     SPI2_h.pSPIx = SPI2;
     SPI2_h.SPIConfig.SPI_BusConfig = SPI_BUS_CONFIG_FD;
@@ -311,6 +313,7 @@ static uint8_t SPI_Transaction(const uint8_t *data, uint32_t length, uint8_t *re
         if(!SPI_TransferByte(0xFF, &rx)) return 0;
 
         if(rx == RESP_MARKER){
+        	Guard();
             if(!SPI_TransferByte(0xFF, response)) return 0;
             return 1;
         }
@@ -399,11 +402,11 @@ void ProcessCommand(char *command)
     }
 
     if(resp == RESP_ERR){
-        snprintf(out_msg, sizeof(out_msg), "ERROR: Slave %u rejected %c%lu\r\n", (unsigned)slave, port_ch, (unsigned long)pin_no);
+        snprintf(out_msg, sizeof(out_msg), "ERROR: Slave %u rejected %c%u\r\n", (unsigned)slave, port_ch, (unsigned long)pin_no);
     }
     else if(data[0] == CMD_WRITE){
         if(resp == data[2]){
-            snprintf(out_msg, sizeof(out_msg), "Slave %u Pin %c%lu written %s OK\r\n", (unsigned)slave, port_ch, (unsigned long)pin_no,
+            snprintf(out_msg, sizeof(out_msg), "Slave %u Pin %c%u written %s OK\r\n", (unsigned)slave, port_ch, (unsigned long)pin_no,
                      (resp == VAL_HIGH) ? "HIGH" : "LOW");
         }
         else{
@@ -412,7 +415,7 @@ void ProcessCommand(char *command)
     }
     else{
         if(resp == VAL_HIGH || resp == VAL_LOW){
-            snprintf(out_msg, sizeof(out_msg), "Slave %u Pin %c%lu is %s\r\n", (unsigned)slave, port_ch, (unsigned long)pin_no, (resp == VAL_HIGH) ? "HIGH" : "LOW");
+            snprintf(out_msg, sizeof(out_msg), "Slave %u Pin %c%u is %s\r\n", (unsigned)slave, port_ch, (unsigned long)pin_no, (resp == VAL_HIGH) ? "HIGH" : "LOW");
         }
         else{
             snprintf(out_msg, sizeof(out_msg), "ERR: Slave %u bad reply 0x%02X\r\n", (unsigned)slave, (unsigned)resp);
